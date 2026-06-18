@@ -143,6 +143,15 @@
       gap: 8px;
       margin-top: 22px;
     }
+    .action-menu {
+      flex: 1 0 100%;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-top: 2px;
+    }
+    .action-menu[hidden] { display: none; }
     .import-feedback {
       color: #d9ecff;
       font-size: 12px;
@@ -668,9 +677,13 @@
         <p>Visão consolidada dos projetos, participantes, gestores, período de execução e participação por pessoa.</p>
         <div class="header-actions">
           <button class="action-button theme-toggle" type="button" onclick="toggleTheme(this)">Tema escuro</button>
-          <button class="action-button presentation-toggle" type="button" onclick="togglePresentation(this)">Modo apresentação</button>
-          <button class="action-button import-toggle" type="button" onclick="openImport()">Importar dados</button>
-          <button class="action-button template-toggle" type="button" onclick="downloadTemplate()">Baixar modelo</button>
+          <button class="action-button menu-toggle" type="button" aria-expanded="false" aria-controls="action-menu" onclick="toggleActionMenu(this)">Ferramentas</button>
+          <div class="action-menu" id="action-menu" hidden>
+            <button class="action-button presentation-toggle" type="button" onclick="togglePresentation(this)">Modo apresentação</button>
+            <button class="action-button import-toggle" type="button" onclick="openImport()">Importar dados</button>
+            <button class="action-button template-toggle" type="button" onclick="downloadTemplate()">Baixar modelo</button>
+            <button class="action-button export-toggle" type="button" onclick="downloadUpdatedDashboard()">Baixar site atualizado</button>
+          </div>
           <input id="data-import-input" type="file" accept=".xlsx,.xls,.csv,.json" hidden>
           <span class="import-feedback" id="import-feedback"></span>
         </div>
@@ -804,7 +817,26 @@
       applyTheme(nextTheme);
     }
     applyTheme(localStorage.getItem('dashboardTheme') || 'light');
+
+    function toggleActionMenu(button, forceOpen) {
+      const menu = document.getElementById('action-menu');
+      const open = typeof forceOpen === 'boolean' ? forceOpen : menu.hidden;
+      menu.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+      button.textContent = open ? 'Fechar ferramentas' : 'Ferramentas';
+    }
+
+    function closeActionMenu() {
+      const button = document.querySelector('.menu-toggle');
+      const menu = document.getElementById('action-menu');
+      if (!button || !menu) return;
+      menu.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+      button.textContent = 'Ferramentas';
+    }
+
     async function togglePresentation(button) {
+      closeActionMenu();
       try {
         if (!document.fullscreenElement) {
           await document.documentElement.requestFullscreen();
@@ -828,6 +860,19 @@
     });
 
     let dashboardProjects = [];
+    let dashboardMeta = {};
+    let feedbackTimer;
+
+    function showFeedback(message, duration = 2000) {
+      const feedback = document.getElementById('import-feedback');
+      clearTimeout(feedbackTimer);
+      feedback.textContent = message;
+      if (message && duration > 0) {
+        feedbackTimer = setTimeout(() => {
+          feedback.textContent = '';
+        }, duration);
+      }
+    }
 
     function htmlDecode(value) {
       const textarea = document.createElement('textarea');
@@ -855,7 +900,13 @@
     }
 
     function titleCaseName(value) {
-      return String(value || '').trim().toLowerCase().replace(/\b\p{L}/gu, (letter) => letter.toUpperCase());
+      const lowercaseWords = new Set(['e', 'da', 'das', 'de', 'do', 'dos']);
+      const uppercaseWords = new Set(['rh', 'ti', 'dp']);
+      return String(value || '').trim().toLowerCase().split(/\s+/).map((word, index) => {
+        if (uppercaseWords.has(word)) return word.toUpperCase();
+        if (index > 0 && lowercaseWords.has(word)) return word;
+        return word.replace(/(^|[-'])\p{L}/gu, (match) => match.toUpperCase());
+      }).join(' ');
     }
 
     function parsePeople(value) {
@@ -913,24 +964,38 @@
       return begin || finish || normalizeDate(period);
     }
 
+    function normalizeStatus(value) {
+      const slug = slugify(value);
+      if (slug.includes('andamento') || slug.includes('execucao')) return 'Em andamento';
+      if (slug.includes('finaliz')) return 'Finalizado';
+      if (slug.includes('conclu')) return 'Concluído';
+      if (slug.includes('atras')) return 'Atrasado';
+      if (slug.includes('paus')) return 'Pausado';
+      return titleCaseName(value || 'Sem status');
+    }
+
     function normalizeProject(row) {
       const project = getField(row, ['project', 'projeto', 'nome do projeto', 'projetos']);
       const manager = getField(row, ['manager', 'gestor', 'gerente', 'area', 'área']);
       const responsible = getField(row, ['responsible', 'responsavel', 'responsável', 'participantes', 'pessoas', 'equipe']);
-      const status = getField(row, ['status', 'situacao', 'situação']) || 'Sem status';
+      const status = normalizeStatus(getField(row, ['status', 'situacao', 'situação']) || 'Sem status');
+      const actualStart = getField(row, ['inicio realizado', 'início realizado', 'data inicio realizado', 'data início realizado']);
+      const actualEnd = getField(row, ['fim realizado', 'data fim realizado']);
+      const plannedStart = getField(row, ['inicio previsto', 'início previsto', 'data inicio prevista', 'data início prevista']);
+      const plannedEnd = getField(row, ['fim previsto', 'data fim prevista']);
       const period = buildPeriod(
-        getField(row, ['inicio', 'início', 'data inicio', 'data início', 'start']),
-        getField(row, ['fim', 'data fim', 'end']),
+        actualStart || plannedStart || getField(row, ['inicio', 'início', 'data inicio', 'data início', 'start']),
+        actualEnd || plannedEnd || getField(row, ['fim', 'data fim', 'end']),
         getField(row, ['period', 'periodo', 'período'])
       );
       const people = parsePeople(getField(row, ['people', 'pessoas', 'participantes']) || responsible);
       return {
         project: String(project || '').trim(),
-        manager: String(manager || '').trim() || 'Sem gestor',
+        manager: titleCaseName(manager) || 'Sem gestor',
         responsible: String(responsible || people.join(', ')).trim(),
         people,
         participant_count: people.length,
-        status: String(status || 'Sem status').trim(),
+        status,
         status_slug: slugify(status),
         period,
         days: Number(getField(row, ['days', 'dias'])) || 0
@@ -991,7 +1056,7 @@
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      return XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+      return XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });
     }
 
     function summarizeProjects(projects) {
@@ -1016,16 +1081,38 @@
       return { peopleRank, managers, statusRank };
     }
 
+    function projectStatusPriority(project) {
+      const status = slugify(project.status);
+      if (status.includes('andamento') || status.includes('execucao')) return 0;
+      if (status.includes('atras')) return 1;
+      if (status.includes('paus')) return 2;
+      if (status.includes('finaliz') || status.includes('conclu')) return 4;
+      return 3;
+    }
+
     function getProjectDates(projects) {
       const dates = projects.flatMap((project) => {
         const period = splitPeriod(project.period);
         return [period.start, period.end].filter(Boolean);
-      });
-      return dates.length ? `${dates[0]} a ${dates[dates.length - 1]}` : 'Sem período';
+      }).map((value) => {
+        const match = String(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        return match ? new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1])) : null;
+      }).filter((date) => date && !Number.isNaN(date.getTime()));
+      if (!dates.length) return 'Sem período';
+      const start = new Date(Math.min(...dates.map((date) => date.getTime())));
+      const end = new Date(Math.max(...dates.map((date) => date.getTime())));
+      return `${start.toLocaleDateString('pt-BR')} a ${end.toLocaleDateString('pt-BR')}`;
     }
 
     function renderDashboard(projects, meta = {}) {
-      dashboardProjects = projects.filter((project) => project.project);
+      dashboardProjects = projects
+        .filter((project) => project.project)
+        .slice()
+        .sort((a, b) => projectStatusPriority(a) - projectStatusPriority(b));
+      dashboardMeta = {
+        source: meta.source || dashboardMeta.source || 'Dados importados',
+        updatedAt: meta.updatedAt || dashboardMeta.updatedAt || new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+      };
       const total = dashboardProjects.length;
       const { peopleRank, managers, statusRank } = summarizeProjects(dashboardProjects);
       const period = getProjectDates(dashboardProjects);
@@ -1036,8 +1123,8 @@
         <article class="card"><span>Gestores</span><strong>${managers.size}</strong></article>
         <article class="card"><span>Participantes por projeto</span><strong>${avg}</strong></article>
       `;
-      document.getElementById('source-name').textContent = meta.source || 'Dados importados';
-      document.getElementById('updated-at').textContent = meta.updatedAt || new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+      document.getElementById('source-name').textContent = dashboardMeta.source;
+      document.getElementById('updated-at').textContent = dashboardMeta.updatedAt;
       document.getElementById('general-period').textContent = period;
       const rankingMax = Math.max(...peopleRank.map((person) => person.count), 1);
       document.getElementById('person-ranking').innerHTML = peopleRank.map((person) => `
@@ -1095,11 +1182,21 @@
       return JSON.parse(decoded).map(normalizeProject);
     }
 
+    function getInitialMeta() {
+      const dataElement = document.getElementById('dashboard-data');
+      return {
+        source: dataElement?.dataset.source || 'Comitê de inovação.xlsx',
+        updatedAt: dataElement?.dataset.updatedAt || '16/06/2026 14:13'
+      };
+    }
+
     function openImport() {
+      closeActionMenu();
       document.getElementById('data-import-input').click();
     }
 
     function downloadTemplate() {
+      closeActionMenu();
       const headers = ['Projeto', 'Gestor', 'Participantes', 'Status', 'Data início', 'Data fim'];
       const example = ['Exemplo de projeto', 'Nome do gestor', 'Pessoa 1, Pessoa 2', 'Em andamento', '01/01/2026', '31/01/2026'];
       const csv = `\ufeff${headers.join(';')}\n${example.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(';')}`;
@@ -1111,19 +1208,46 @@
       URL.revokeObjectURL(link.href);
     }
 
+    function downloadUpdatedDashboard() {
+      closeActionMenu();
+      if (!dashboardProjects.length) {
+        showFeedback('Importe dados válidos antes de baixar o site');
+        return;
+      }
+      const clone = document.documentElement.cloneNode(true);
+      clone.querySelector('body')?.classList.remove('presentation');
+      const cloneFeedback = clone.querySelector('#import-feedback');
+      if (cloneFeedback) cloneFeedback.textContent = '';
+      const dataElement = clone.querySelector('#dashboard-data');
+      if (!dataElement) {
+        showFeedback('Não foi possível preparar o arquivo atualizado');
+        return;
+      }
+      dataElement.textContent = JSON.stringify(dashboardProjects).replace(/</g, '\\u003c');
+      dataElement.dataset.source = dashboardMeta.source || 'Dados importados';
+      dataElement.dataset.updatedAt = dashboardMeta.updatedAt || new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+      const html = `<!doctype html>\n${clone.outerHTML}`;
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'index.html';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      showFeedback('index.html atualizado baixado');
+    }
+
     document.getElementById('data-import-input').addEventListener('change', async (event) => {
       const file = event.target.files[0];
-      const feedback = document.getElementById('import-feedback');
       if (!file) return;
       try {
-        feedback.textContent = 'Importando...';
+        showFeedback('Importando...', 0);
         const rows = await readImportFile(file);
         const projects = (Array.isArray(rows) ? rows : []).map(normalizeProject).filter((project) => project.project);
         if (!projects.length) throw new Error('Nenhum projeto válido encontrado. Confira as colunas do modelo.');
         renderDashboard(projects, { source: file.name });
-        feedback.textContent = `${projects.length} projetos importados`;
+        showFeedback(`${projects.length} projetos importados`);
       } catch (error) {
-        feedback.textContent = error.message || 'Não foi possível importar o arquivo';
+        showFeedback(error.message || 'Não foi possível importar o arquivo');
       } finally {
         event.target.value = '';
       }
@@ -1131,15 +1255,12 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       try {
-        renderDashboard(getInitialData(), {
-          source: 'Comitê de inovação.xlsx',
-          updatedAt: '16/06/2026 14:13'
-        });
+        renderDashboard(getInitialData(), getInitialMeta());
       } catch (error) {
-        document.getElementById('import-feedback').textContent = 'Não foi possível carregar os dados iniciais';
+        showFeedback('Não foi possível carregar os dados iniciais');
       }
     });
   </script>
-  <script type="application/json" id="dashboard-data">[{&quot;project&quot;: &quot;BI de Faturamento e Transporte&quot;, &quot;manager&quot;: &quot;Diretoria&quot;, &quot;responsible&quot;: &quot;Fernando, Daniel e Sthanly&quot;, &quot;people&quot;: [&quot;FERNANDO&quot;, &quot;DANIEL&quot;, &quot;STHANLY&quot;], &quot;participant_count&quot;: 3, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;07/07/2025 a 07/09/2025&quot;, &quot;days&quot;: 63}, {&quot;project&quot;: &quot;Ferramenta para o VT (Cadastro e Recarga)&quot;, &quot;manager&quot;: &quot;Mileide&quot;, &quot;responsible&quot;: &quot;Leonardo e Fernando&quot;, &quot;people&quot;: [&quot;LEONARDO&quot;, &quot;FERNANDO&quot;], &quot;participant_count&quot;: 2, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;23/06/2025 a 30/08/2025&quot;, &quot;days&quot;: 69}, {&quot;project&quot;: &quot;Medidor de Métricas (Planejamento)&quot;, &quot;manager&quot;: &quot;Jeferson&quot;, &quot;responsible&quot;: &quot;Fernando e Leonardo&quot;, &quot;people&quot;: [&quot;FERNANDO&quot;, &quot;LEONARDO&quot;], &quot;participant_count&quot;: 2, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;11/08/2025 a 15/09/2025&quot;, &quot;days&quot;: 36}, {&quot;project&quot;: &quot;Ferramentas de Métricas Setor Comercial&quot;, &quot;manager&quot;: &quot;Maurício&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;05/09/2025 a 09/09/2025&quot;, &quot;days&quot;: 5}, {&quot;project&quot;: &quot;Conferência Terminais&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;18/07/2025 a 30/07/2025&quot;, &quot;days&quot;: 13}, {&quot;project&quot;: &quot;Relatório Terceirizados&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;29/07/2025 a 31/07/2025&quot;, &quot;days&quot;: 3}, {&quot;project&quot;: &quot;Programa PDF NetSales&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi e Fernando&quot;, &quot;people&quot;: [&quot;DAVI&quot;, &quot;FERNANDO&quot;], &quot;participant_count&quot;: 2, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;10/07/2025 a 04/08/2025&quot;, &quot;days&quot;: 26}, {&quot;project&quot;: &quot;Relatório de Custo e Despesa IMMU&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;29/07/2025 a 31/07/2025&quot;, &quot;days&quot;: 3}, {&quot;project&quot;: &quot;Lançamentos Conta Corrente Empresas&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;02/07/2025 a 08/07/2025&quot;, &quot;days&quot;: 7}, {&quot;project&quot;: &quot;Resumo de Fechamento FC&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;29/09/2025 a 03/10/2025&quot;, &quot;days&quot;: 5}, {&quot;project&quot;: &quot;Controle de Fechamento de Caixas&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;15/09/2025 a 27/10/2025&quot;, &quot;days&quot;: 43}, {&quot;project&quot;: &quot;Dados em tempos reais - Maurício&quot;, &quot;manager&quot;: &quot;Maurício&quot;, &quot;responsible&quot;: &quot;Daniel&quot;, &quot;people&quot;: [&quot;DANIEL&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;13/11/2025 a 18/11/2025&quot;, &quot;days&quot;: 6}, {&quot;project&quot;: &quot;Automatização de Processos - RH&quot;, &quot;manager&quot;: &quot;Milena e Valeska&quot;, &quot;responsible&quot;: &quot;Leonardo e Fernando&quot;, &quot;people&quot;: [&quot;LEONARDO&quot;, &quot;FERNANDO&quot;], &quot;participant_count&quot;: 2, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;29/09/2025 a 31/10/2025&quot;, &quot;days&quot;: 33}, {&quot;project&quot;: &quot;Identificação de Aerossóis&quot;, &quot;manager&quot;: &quot;Milena&quot;, &quot;responsible&quot;: &quot;Rita e Daniel&quot;, &quot;people&quot;: [&quot;RITA&quot;, &quot;DANIEL&quot;], &quot;participant_count&quot;: 2, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;14/07/2025 a 24/11/2025&quot;, &quot;days&quot;: 134}, {&quot;project&quot;: &quot;Monitoramento da efetividade das ações - Setor do Maurício&quot;, &quot;manager&quot;: &quot;Maurício&quot;, &quot;responsible&quot;: &quot;Sthanly&quot;, &quot;people&quot;: [&quot;STHANLY&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;04/11/2025 a 13/11/2025&quot;, &quot;days&quot;: 10}, {&quot;project&quot;: &quot;Melhorias APP PDF NetSales&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;03/12/2025 a 08/12/2025&quot;, &quot;days&quot;: 6}, {&quot;project&quot;: &quot;BOT de remessa Caruana&quot;, &quot;manager&quot;: &quot;Renan&quot;, &quot;responsible&quot;: &quot;Davi&quot;, &quot;people&quot;: [&quot;DAVI&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;23/01/2026 a 26/01/2026&quot;, &quot;days&quot;: 4}, {&quot;project&quot;: &quot;Otimização ABT e EMV&quot;, &quot;manager&quot;: &quot;Fábio&quot;, &quot;responsible&quot;: &quot;Sthanly&quot;, &quot;people&quot;: [&quot;STHANLY&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;19/01/2026 a 27/02/2026&quot;, &quot;days&quot;: 40}, {&quot;project&quot;: &quot;Controle de Pontos RH&quot;, &quot;manager&quot;: &quot;Valeska&quot;, &quot;responsible&quot;: &quot;Leonardo e Fernando&quot;, &quot;people&quot;: [&quot;LEONARDO&quot;, &quot;FERNANDO&quot;], &quot;participant_count&quot;: 2, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;31/10/2025 a 02/03/2026&quot;, &quot;days&quot;: 123}, {&quot;project&quot;: &quot;Comunicação - Otimização da planilha \&quot;Como foi sua viagem?\&quot;&quot;, &quot;manager&quot;: &quot;Karen&quot;, &quot;responsible&quot;: &quot;Davi, Leonardo, Daniel, Sthanly, Fernando e Rita&quot;, &quot;people&quot;: [&quot;DAVI&quot;, &quot;LEONARDO&quot;, &quot;DANIEL&quot;, &quot;STHANLY&quot;, &quot;FERNANDO&quot;, &quot;RITA&quot;], &quot;participant_count&quot;: 6, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;01/12/2025 a 19/02/2026&quot;, &quot;days&quot;: 81}, {&quot;project&quot;: &quot;Comercial - Ferramenta para extrair pedidos de cartões Workspace&quot;, &quot;manager&quot;: &quot;Mileide&quot;, &quot;responsible&quot;: &quot;Daniel&quot;, &quot;people&quot;: [&quot;DANIEL&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;05/03/2026 a 06/03/2026&quot;, &quot;days&quot;: 2}, {&quot;project&quot;: &quot;RH Digital&quot;, &quot;manager&quot;: &quot;Valeska&quot;, &quot;responsible&quot;: &quot;Fernando&quot;, &quot;people&quot;: [&quot;FERNANDO&quot;], &quot;participant_count&quot;: 1, &quot;status&quot;: &quot;Finalizado&quot;, &quot;status_slug&quot;: &quot;finalizado&quot;, &quot;period&quot;: &quot;05/01/2026 a 31/01/2026&quot;, &quot;days&quot;: 27}, {&quot;project&quot;: &quot;Criação site - Vale Transporte&quot;, &quot;manager&quot;: &quot;Francinaldo&quot;, &quot;responsible&quot;: &quot;Davi, Leonardo, Daniel, Sthanly, Fernando e Rita&quot;, &quot;people&quot;: [&quot;DAVI&quot;, &quot;LEONARDO&quot;, &quot;DANIEL&quot;, &quot;STHANLY&quot;, &quot;FERNANDO&quot;, &quot;RITA&quot;], &quot;participant_count&quot;: 6, &quot;status&quot;: &quot;Em andamento&quot;, &quot;status_slug&quot;: &quot;em-andamento&quot;, &quot;period&quot;: &quot;01/03/2026 a 30/06/2026&quot;, &quot;days&quot;: 122}]</script>
+  <script type="application/json" id="dashboard-data" data-source="Comitê de inovação.xlsx" data-updated-at="18/06/2026, 08:30">[{"project":"BI de Faturamento e Transporte","manager":"Diretoria","responsible":"FERNANDO, DANIEL e STHANLY","people":["Fernando","Daniel","Sthanly"],"participant_count":3,"status":"Finalizado","status_slug":"finalizado","period":"07/07/2025 a 07/09/2025","days":0},{"project":"Ferramenta para o VT (Cadastro e Recarga)","manager":"Mileide","responsible":"LEONARDO e FERNANDO","people":["Leonardo","Fernando"],"participant_count":2,"status":"Finalizado","status_slug":"finalizado","period":"23/06/2025 a 30/08/2025","days":0},{"project":"Medidor de Métricas (Planejamento)","manager":"Jeferson","responsible":"FERNANDO e LEONARDO","people":["Fernando","Leonardo"],"participant_count":2,"status":"Finalizado","status_slug":"finalizado","period":"11/08/2025 a 15/09/2025","days":0},{"project":"Ferramentas de Métricas Setor Comercial","manager":"Maurício","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"05/09/2025 a 09/09/2025","days":0},{"project":"Conferência Terminais","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"18/07/2025 a 30/07/2025","days":0},{"project":"Relatório Terceirizados","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"29/07/2025 a 31/07/2025","days":0},{"project":"Programa PDF NetSales","manager":"Renan","responsible":"DAVI, FERNANDO","people":["Davi","Fernando"],"participant_count":2,"status":"Finalizado","status_slug":"finalizado","period":"10/07/2025 a 04/08/2025","days":0},{"project":"Relatório de Custo e Despesa IMMU","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"29/07/2025 a 31/07/2025","days":0},{"project":"Lançamentos Conta Corrente Empresas","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"02/07/2025 a 08/07/2025","days":0},{"project":"Resumo de Fechamento FC","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"29/09/2025 a 03/10/2025","days":0},{"project":"Controle de Fechamento de Caixas","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"15/09/2025 a 27/10/2025","days":0},{"project":"Dados em tempos reais - Mauricio","manager":"Maurício","responsible":"DANIEL","people":["Daniel"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"13/11/2025 a 18/11/2025","days":0},{"project":"Automatização de Processos - R.H","manager":"Milena e Valeska","responsible":"LEONARDO E FERNANDO","people":["Leonardo","Fernando"],"participant_count":2,"status":"Finalizado","status_slug":"finalizado","period":"29/09/2025 a 31/10/2025","days":0},{"project":"Identificação de Aerossóis","manager":"Milena","responsible":"RITA e DANIEL","people":["Rita","Daniel"],"participant_count":2,"status":"Finalizado","status_slug":"finalizado","period":"14/07/2025 a 24/11/2025","days":0},{"project":"Monitoramento da efetividade das ações - Setor do Maurício","manager":"Maurício","responsible":"STHANLY","people":["Sthanly"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"04/11/2025 a 13/11/2025","days":0},{"project":"Melhorias APP PDF Netsales","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"03/12/2025 a 08/12/2025","days":0},{"project":"BOT de remessa Caruana","manager":"Renan","responsible":"DAVI","people":["Davi"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"23/01/2026 a 26/01/2026","days":0},{"project":"Otimização ABT e EMV","manager":"Fábio","responsible":"STHANLY","people":["Sthanly"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"19/01/2026 a 27/02/2026","days":0},{"project":"Controle de Pontos RH","manager":"Valeska","responsible":"LEONARDO E FERNANDO","people":["Leonardo","Fernando"],"participant_count":2,"status":"Finalizado","status_slug":"finalizado","period":"31/10/2025 a 02/03/2026","days":0},{"project":"Comunicação - Otimização da planilha \"Como foi sua viagem?\"","manager":"Karen","responsible":"DAVI, LEONARDO, DANIEL, STHANLY, FERNANDO E RITA","people":["Davi","Leonardo","Daniel","Sthanly","Fernando","Rita"],"participant_count":6,"status":"Finalizado","status_slug":"finalizado","period":"01/12/2025 a 19/02/2026","days":0},{"project":"Conercial - Ferramenta para extrair pedidos de cartões Workspace","manager":"Mileide","responsible":"DANIEL","people":["Daniel"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"05/03/2026 a 06/03/2026","days":0},{"project":"RH Digital","manager":"Valeska","responsible":"FERNANDO","people":["Fernando"],"participant_count":1,"status":"Finalizado","status_slug":"finalizado","period":"05/01/2026 a 31/01/2026","days":0},{"project":"Criação site - Vale Transporte","manager":"Francinaldo","responsible":"DAVI, LEONARDO, DANIEL, STHANLY, FERNANDO E RITA","people":["Davi","Leonardo","Daniel","Sthanly","Fernando","Rita"],"participant_count":6,"status":"Em andamento","status_slug":"em-andamento","period":"01/03/2026 a 30/06/2026","days":0},{"project":"Projeto - Dashboard de Custos","manager":"Leiliano","responsible":"LEONARDO","people":["Leonardo"],"participant_count":1,"status":"Em andamento","status_slug":"em-andamento","period":"01/06/2026 a 30/06/2026","days":0}]</script>
 </body>
 </html>
