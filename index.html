@@ -700,15 +700,6 @@
         <p>Visão consolidada dos projetos, participantes, gestores, período de execução e participação por pessoa.</p>
         <div class="header-actions">
           <button class="action-button theme-toggle" type="button" onclick="toggleTheme(this)">Tema escuro</button>
-          <button class="action-button menu-toggle" type="button" aria-expanded="false" aria-controls="action-menu" onclick="toggleActionMenu(this)">Ferramentas</button>
-          <div class="action-menu" id="action-menu" hidden>
-            <button class="action-button presentation-toggle" type="button" onclick="togglePresentation(this)">Modo apresentação</button>
-            <button class="action-button import-toggle" type="button" onclick="openImport()">Importar dados</button>
-            <button class="action-button template-toggle" type="button" onclick="downloadTemplate()">Baixar modelo</button>
-            <button class="action-button export-toggle" type="button" onclick="downloadUpdatedDashboard()">Baixar site atualizado</button>
-          </div>
-          <input id="data-import-input" type="file" accept=".xlsx,.xls,.csv,.json" hidden>
-          <span class="import-feedback" id="import-feedback"></span>
         </div>
       </div>
       <aside class="hero-side">
@@ -826,7 +817,6 @@
       </div>
     </section>
   </main>
-  <script src="xlsx.full.min.js"></script>
   <script>
     function applyTheme(theme) {
       const dark = theme === 'dark';
@@ -841,25 +831,7 @@
     }
     applyTheme(localStorage.getItem('dashboardTheme') || 'light');
 
-    function toggleActionMenu(button, forceOpen) {
-      const menu = document.getElementById('action-menu');
-      const open = typeof forceOpen === 'boolean' ? forceOpen : menu.hidden;
-      menu.hidden = !open;
-      button.setAttribute('aria-expanded', String(open));
-      button.textContent = open ? 'Fechar ferramentas' : 'Ferramentas';
-    }
-
-    function closeActionMenu() {
-      const button = document.querySelector('.menu-toggle');
-      const menu = document.getElementById('action-menu');
-      if (!button || !menu) return;
-      menu.hidden = true;
-      button.setAttribute('aria-expanded', 'false');
-      button.textContent = 'Ferramentas';
-    }
-
     async function togglePresentation(button) {
-      closeActionMenu();
       try {
         if (!document.fullscreenElement) {
           await document.documentElement.requestFullscreen();
@@ -888,6 +860,7 @@
 
     function showFeedback(message, duration = 2000) {
       const feedback = document.getElementById('import-feedback');
+      if (!feedback) return;
       clearTimeout(feedbackTimer);
       feedback.textContent = message;
       if (message && duration > 0) {
@@ -1212,69 +1185,6 @@
         updatedAt: dataElement?.dataset.updatedAt || '16/06/2026 14:13'
       };
     }
-
-    function openImport() {
-      closeActionMenu();
-      document.getElementById('data-import-input').click();
-    }
-
-    function downloadTemplate() {
-      closeActionMenu();
-      const headers = ['Projeto', 'Gestor', 'Participantes', 'Status', 'Data início', 'Data fim'];
-      const example = ['Exemplo de projeto', 'Nome do gestor', 'Pessoa 1, Pessoa 2', 'Em andamento', '01/01/2026', '31/01/2026'];
-      const csv = `\ufeff${headers.join(';')}\n${example.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(';')}`;
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'modelo-importacao-comite-inovacao.csv';
-      link.click();
-      URL.revokeObjectURL(link.href);
-    }
-
-    function downloadUpdatedDashboard() {
-      closeActionMenu();
-      if (!dashboardProjects.length) {
-        showFeedback('Importe dados válidos antes de baixar o site');
-        return;
-      }
-      const clone = document.documentElement.cloneNode(true);
-      clone.querySelector('body')?.classList.remove('presentation');
-      const cloneFeedback = clone.querySelector('#import-feedback');
-      if (cloneFeedback) cloneFeedback.textContent = '';
-      const dataElement = clone.querySelector('#dashboard-data');
-      if (!dataElement) {
-        showFeedback('Não foi possível preparar o arquivo atualizado');
-        return;
-      }
-      dataElement.textContent = JSON.stringify(dashboardProjects).replace(/</g, '\\u003c');
-      dataElement.dataset.source = dashboardMeta.source || 'Dados importados';
-      dataElement.dataset.updatedAt = dashboardMeta.updatedAt || new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-      const html = `<!doctype html>\n${clone.outerHTML}`;
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'index.html';
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-      showFeedback('index.html atualizado baixado');
-    }
-
-    document.getElementById('data-import-input').addEventListener('change', async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
-      try {
-        showFeedback('Importando...', 0);
-        const rows = await readImportFile(file);
-        const projects = (Array.isArray(rows) ? rows : []).map(normalizeProject).filter((project) => project.project);
-        if (!projects.length) throw new Error('Nenhum projeto válido encontrado. Confira as colunas do modelo.');
-        renderDashboard(projects, { source: file.name });
-        showFeedback(`${projects.length} projetos importados`);
-      } catch (error) {
-        showFeedback(error.message || 'Não foi possível importar o arquivo');
-      } finally {
-        event.target.value = '';
-      }
-    });
 
     window.addEventListener('DOMContentLoaded', () => {
       try {
